@@ -1,68 +1,56 @@
+import Queue
 import json
 import logging
 import os
 import sys
-import threading
-import uuid
 import unittest
+import uuid
 
 from tornado import web
-from tornado.concurrent import return_future
+from tornado.ioloop import IOLoop
 import tornado.httpserver
-import tornado.ioloop
 import tornado.websocket
-
-from main import main
 
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 timeout = 3
 logger = logging.getLogger(__name__)
+clients = Queue.Queue()
+
 
 def static_path(path):
     return os.path.join(static_dir, path)
 
 
 class FrontendServer(object):
-    def __init__(self, addr):
+    def __init__(self, addr, io_loop=None):
         self.addr = addr
+        self.io_loop = io_loop or IOLoop.instance()
+        self.started = False
+
         self.routes = tornado.web.Application(
             [(r"/tests", TestHandler),
              (r"/resp", ResponseHandler),
              (r"/", web.RedirectHandler, {"url": "/app.html"}),
              (r"/(.*[html|css|js])$", web.StaticFileHandler,
               {"path": static_dir})])
-        self.server = tornado.httpserver.HTTPServer(self.routes)
-        self.instance = None
-        self.shutdown_event = threading.Event()
+        self.server = tornado.httpserver.HTTPServer(
+            self.routes, io_loop=self.io_loop)
 
     def start(self):
-        assert self.instance is None
+        """Start blocking FrontendServer."""
+
+        self.started = True
         self.server.listen(self.addr[1])
-        tornado.ioloop.IOLoop.instance().start()
-        self.instance = threading.Thread(target=self._loop)
-        self.instance.daemon = True
-        self.instance.start()
+        self.io_loop.start()
 
     def stop(self):
-        if not self.instance and not self.server:
+        if not self.server:
             return
-
         self.server.stop()
 
-        try:
-            self.shutdown_event.set()
-            self.instance.join(timeout)
-        finally:
-            self.instance = None
-
     def is_alive(self):
-        if self.instance:
-            return self.instance.is_alive()
-        return False
-
-    def _loop(self):
-        return self.shutdown_event.wait()
+        return self.started
 
 
 class ResponseHandler(tornado.websocket.WebSocketHandler):
@@ -78,44 +66,38 @@ class ResponseHandler(tornado.websocket.WebSocketHandler):
         elif "instructPromptOk" in message:
             test_callback(True)
 
-def serialize_suite(tests):
-    """Serialize a ``unittest.TestSuite`` instance for transportation
-    across the wire.
 
-    Tests are represented by their hash as we have no desire to
-    replicate the full Test instance object on the client side.
+# Not currently in use, but offers a more foolproof way of emitting
+# messages to connections:
+class HandlerMixin(object):
+    handlers = []
 
-    """
+    def add(self, handler, callback):
+        self.handlers.append(callback)
 
-    rv = []
-    for test in tests:
-        rv.append({"id": hash(test),
-                   "description": str(test)})
-    return rv
+        # Hack:
+        global clients
+        clients.put(handler)
+
+    def emit(self, event, data):
+        for cb in self.handlers:
+            cb(event, data)
 
 
-class TestHandler(tornado.websocket.WebSocketHandler):
-    clients = []
-
+class TestHandler(tornado.websocket.WebSocketHandler, HandlerMixin):
     def __init__(self, *args, **kwargs):
         super(TestHandler, self).__init__(*args, **kwargs)
-        self.id = uuid.uuid4()
-        # TODO(ato): Hack
-        self.suite = self.get_test_list()
+        self.id = None
+        self.suite = unittest.TestSuite()
 
-    def open(self):
-        self.clients.append(self.id)
+    def open(self, *args):
+        self.id = uuid.uuid4()
+        self.stream.set_nodelay(True)
+        self.add(self, self.async_callback(self.emit))
         logger.info("Accepted new client: %s" % self.id)
 
-        # Send a list of tests to the client.
-        test_list = serialize_suite(self.suite)
-        self.emit("testList", test_list)
-
-        self.run_tests()
-
     def on_close(self):
-        self.clients.remove(self.id)
-        logger.info("Client left")
+        logger.info("Client left: %s" % self.id)
 
     def emit(self, event, data):
         command = {event: data}
@@ -146,25 +128,4 @@ class TestHandler(tornado.websocket.WebSocketHandler):
 
     def run_tests(self):
         logger.info("runtest")
-        main(self, tornado.ioloop.IOLoop.instance())
-
-    # TODO(ato): Total hack.  Instead of reading in the test list here
-    # we should rely on what the user passes in from command-line or
-    # on auto-discovery through unittest.
-    #
-    # Because classes that extend semiauto.TestCase expect a reference
-    # to this class and the IOLoop we are currently required to put it
-    # here.
-    #
-    # This code was moved here from the main function in main.py
-    # because main is currently called from this class when a client
-    # connects, which means we'd have no way of sending the test list
-    # to the client before running the tests.
-    def get_test_list(self):
-        # TODO: Test discovery and automatic test class instantiation
-        # with correct arguments
-        suite = unittest.TestSuite()
-        from tests.test_sms import TestSms
-        io_loop = tornado.ioloop.IOLoop.instance()
-        suite.addTest(TestSms("test_navigate", handler=self, io_loop=io_loop))
-        return suite
+        main(self, IOLoop.instance())

@@ -1,26 +1,51 @@
-import unittest
-
+from tornado import testing
 import tornado
-import tornado.testing
 
 from marionette import Marionette, MarionetteException
+
+from semiauto import environment
+from semiauto.environment import InProcessTestEnvironment
+
+
+# TODO(ato): Find better name: interaction_test? interact?
+def test(*args, **kwargs):
+    """Wraps ``tornado.testing.gen_test``."""
+    return tornado.testing.gen_test(*args, **kwargs)
 
 
 class TestCase(tornado.testing.AsyncTestCase):
     def __init__(self, *args, **kwargs):
-        #self.config = kwargs.pop("config")
-        self.handler = kwargs.pop('handler')
-        self.io_loop = kwargs.pop('io_loop')
-        self.cert_test_app = None
+        self.config = kwargs.pop("config")
+        #self.handler = kwargs.pop('handler')
+        #self.io_loop = kwargs.pop('io_loop')
         super(TestCase, self).__init__(*args, **kwargs)
+        self.io_loop = self.get_new_ioloop()
+        self.handler = None
+        self.marionette = None
 
     def setUp(self):
+        """Sets up the environment for a test case.
+
+        Retreive already running test environment, or create a new one if
+        one doesn't exist.  A test environment consists of a web
+        server with HTTP and WebSocket handlers which tests can access
+        through ``self.handler``.
+
+        Then set up a Marionette session to the connected device if
+        one does not already exist.
+
+        """
+
         super(TestCase, self).setUp()
-        # import environment
-        # from environment import InProcessTestEnvironment
-        # self.environment = environment.get(InProcessTestEnvironment)
-        # self.server = self.environment.server
-        self.marionette = None
+
+        self.environment = environment.get(InProcessTestEnvironment)
+        self.server = self.environment.server
+        self.handler = self.environment.handler
+
+        # TODO(ato): Also store marionette session and client handler
+        # inside environment?
+        self.environment = environment.get(InProcessTestEnvironment)
+        self.server = self.environment.server
 
         self.create_marionette()
         self.io_loop.run_sync(self.use_cert_app)
@@ -29,7 +54,13 @@ class TestCase(tornado.testing.AsyncTestCase):
         super(TestCase, self).tearDown()
         self.io_loop.run_sync(self.close_cert_app)
 
+    def tearDown(self):
+        self.server.stop()
+        super(TestCase, self).tearDown()
+
     def create_marionette(self):
+        """Creates a new Marionette session if one does not exist."""
+
         if not self.marionette or not self.marionette.session:
             self.marionette = Marionette()
             self.marionette.start_session()
@@ -72,6 +103,10 @@ class TestCase(tornado.testing.AsyncTestCase):
             self.fail(message)
 
     def get_new_ioloop(self):
+        """Retreives the singleton ``tornado.ioloop.IOLoop`` instance."""
+
+        if not hasattr(self, "io_loop"):
+            self.io_loop = tornado.ioloop.IOLoop.instance()
         return self.io_loop
 
     def prompt(self, message):
@@ -120,7 +155,7 @@ class TestCase(tornado.testing.AsyncTestCase):
         :param message: The instruction you want to give the user
 
         :returns: A generator which must be yielded. Once yielded,
-                  the reutrn value will be either True if they 
+                  the reutrn value will be either True if they
                   succeeded or False if they did not.
 
         """
