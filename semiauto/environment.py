@@ -1,66 +1,76 @@
 import logging
-import ConfigParser
+import threading
 
 from server import FrontendServer
+
+from tornado.ioloop import IOLoop
 
 
 """Used to hold a TestEnvironment in a static field."""
 env = None
 
 
-def get(environ):
+def get(environ, **kwargs):
     global env
     if not env:
-        env = environ()
+        env = environ(**kwargs)
         env.start()
     assert env.is_alive()
     return env
 
 
-# class TestEnvironment(object):
-#     def start(self):
-#         raise NotImplemented
-
-#     def stop(self):
-#         raise NotImplemented
-
-#     def is_alive(self):
-#         raise NotImplemented
-
-#     @property
-#     def server(self):
-#         raise NotImplemented
-
-
 class InProcessTestEnvironment(object):
-    """Provides an in-process test environment."""
+    def __init__(self, addr=("localhost", 6666), server_cls=None,
+                 io_loop=None):
+        self.addr = addr
+        self.io_loop = io_loop or IOLoop()
+        self.started = False
+        self.handler = None
 
-    def __init__(self, addr=("localhost", 6666)):
-        """Constructs a new test environment.
+        if server_cls is None:
+            server_cls = FrontendServer
+        self.server = server_cls(addr, io_loop=self.io_loop)
 
-        :param server_addr: A tuple of hostname and port to bind the
-            HTTP server to.
+    def start(self, block=False):
+        """Start the test environment.
+
+        :param block: True to run the server on the current thread,
+            blocking, False to run on a separate thread.
 
         """
 
-        self.server = FrontendServer(addr)
+        self.started = True
 
-    def start(self):
-        if not self.server.is_alive():
+        if block:
             self.server.start()
+        else:
+            self.server_thread = threading.Thread(target=self.server.start)
+            self.server_thread.daemon = True  # don't hang on exist
+            self.server_thread.start()
 
     def stop(self):
-        if self.server:
-            self.server.stop()
+        """Stop the test environment.
+
+        If the test environment is not running, this method has no effect.
+
+        """
+
+        if self.started:
+            try:
+                self.server.stop()
+                self.server_thread.join()
+                self.server_thread = None
+            except AttributeError:
+                pass
+            self.started = False
         self.server = None
 
     def is_alive(self):
-        return self.server.is_alive()
+        return self.started
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     env = InProcessTestEnvironment()
-    env.start()
     print("Listening on %s" % ":".join(str(i) for i in env.server.addr))
-    while env.is_alive():
-        pass
+    env.start(block=True)

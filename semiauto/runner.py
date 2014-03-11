@@ -1,3 +1,4 @@
+import collections
 import unittest
 
 
@@ -225,3 +226,33 @@ class TestStateUpdater(TestEvents):
 
     def on_test_run_stop(self):
         self.send_event("testRunStop")
+
+
+def serialize_suite(tests, ov=[]):
+    """Serialize a ``unittest.TestSuite`` instance for transportation
+    across the wire.
+
+    Tests are represented by their hash as we have no desire to
+    replicate the full Test instance object on the client side.
+
+    :param tests: Instance of ``unittest.suite.TestSuite`` to be
+        serialized.
+
+    :returns: List of test dicts represented by `id` and
+        `description`.
+
+    """
+
+    rv = ov
+    if isinstance(tests, collections.Iterable):
+        # [TestCase, ...] or [<TestSuite ...>, <TestSuite ...>]
+        for test in tests:
+            if isinstance(test, unittest.suite.TestSuite):
+                rv = serialize_suite(test, rv)
+            else:
+                rv.append({"id": hash(test), "description": str(test)})
+    elif hasattr(tests, "_tests"):
+        # <unittest.suite.TestSuite _tests=[...]>
+        rv = serialize_suite(tests._tests, rv)
+
+    return rv

@@ -1,136 +1,146 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import with_statement
+#!/usr/bin/env python
 
-import functools
-import logging
-import os
-import signal
-import socket
 import sys
 import unittest
 
-try:
-    from tornado import gen
-    from tornado.httpclient import AsyncHTTPClient
-    from tornaod.httpserver import HTTPServer
-    from tornado.simple_httpclient import SimpleAsyncHTTPClient
-    from tornado import netutil
-except ImportError:
-    # These modules are not importable on app engine.  Parts of this
-    # module won't work,  but e.g. LogTrapTestCase and main() will.
-    AsyncHTTPClient = None
-    gen = None
-    HTTPServer = None
-    IOLoop = None
-    netutil = None
-    SimpleAsyncHTTPClient = None
-from tornado.log import gen_log
-from tornado.stack_context import ExceptionStackContext
-from tornado.util import raise_exc_info, basestring_type
-
-from runner import PreInstantiatedTestRunner
-from runner import TestEventDelegator
-from runner import TestStateUpdater
+import environment
+import runner
 
 
-def main(handler, io_loop, **kwargs):
+test_loader = None
+
+
+def _install_test_event_hooks(test_runner, handler):
+    state_updater = runner.TestStateUpdater(handler)
+    test_runner.resultclass.add_callback(state_updater)
+
+
+def run(suite, verbosity=1, quiet=False, failfast=False,
+        catch_break=False, buffer=True, **kwargs):
     """A simple test runner.
 
-    This test runner is essentially equivalent to `unittest.main` from
-    the standard library, but adds support for tornado-style option
-    parsing and log formatting.
+    This test runner is essentially equivalent to ``unittest.main``
+    from the standard library, but adds support for loading test
+    classes with extra keyword arguments.
 
     The easiest way to run a test is via the command line::
 
-        python -m tornado.testing tornado.test.stack_context_test
+        python -m semiauto test_sms
 
     See the standard library unittest module for ways in which tests
     can be specified.
 
-    Projects with many tests may wish to define a test script like
-    ``tornaod/test/runtests.py``.  This script should define a method
-    ``all()`` which returns a test suite and then call
-    `tornado.testing.main()`.  Note that even when a test script is
-    used, the ``all()`` test suite may be overridden by naming a
-    single test on the command line::
+    For example it is possible to automatically discover tests::
 
-        # Runs all tests
-        python -m tornado.test.runtests
-        # Runs one test
-        python -m tornado.test.runtests tornado.test.stack_context_test
-
-    Additional keywords arguments passed through to
-    ``unittest.main()``.  For example, use
-    ``tornado.testing.main(verbosity=2)`` to show many test details as
-    they are run.  See
-    http://docs.python.org/library/unittest.html#unittest.main for
-    full argument list.
+        python -m semiauto discover .
 
     """
 
-    from tornado.options import define, options, parse_command_line
+    if catch_break:
+        import unittest.signals
+        unittest.signals.installHandler()
 
-    define("exception_on_interrupt", type=bool, default=True,
-           help=("If true (default), ctrl-c raises a KeyboardInterrupt "
-                 "exception.  This prints a stack trace buf cannot interrupt "
-                 "certain operations.  If false, the process is more reliably "
-                 "killed, but does not print a stack trace."))
+    test_runner = runner.PreInstantiatedTestRunner(verbosity=verbosity,
+                                                   failfast=failfast,
+                                                   buffer=buffer,
+                                                   **kwargs)
 
-    # support the same options as unittest's command-line interface
-    define("verbose", type=bool)
-    define("quiet", type=bool)
-    define("failfast", type=bool)
-    define("catch", type=bool)
-    define("buffer", type=bool)
+    delegator = runner.TestEventDelegator(
+        test_runner.stream, test_runner.descriptions, test_runner.verbosity)
+    test_runner.resultclass = delegator
 
-    argv = [sys.argv[0]] + parse_command_line(sys.argv)
+    # Start new test environment, because first environment.get does
+    # that for us the first time.
+    #
+    # This is a hack and shouldn't be here.  The reason it is is
+    # because unittest doesn't allow us to modify the runner in a
+    # TestCase's setUp.
+    #
+    # Generally a lot of this code should live in TestCase.setUp.
+    env = environment.get(environment.InProcessTestEnvironment)
 
-    if not options.exception_on_interrupt:
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # TODO(ato): Only spawn a browser when asked to.
+    import webbrowser
+    webbrowser.open("http://localhost:6666/")
 
-    if options.verbose is not None:
-        kwargs["verbosity"] = 2
-    if options.quiet is not None:
-        kwargs["verbosity"] = 0
-    if options.failfast is not None:
-        kwargs["failfast"] = True
-    if options.catch is not None:
-        kwargs["catchbreak"] = True
-    if options.buffer is not None:
-        kwargs["buffer"] = True
+    # Get a reference to the WebSocket handler that we can use to
+    # communicate with the client browser.
+    from semiauto import server
+    handler = server.clients.get(block=True)
 
-    if __name__ == "__main__" and len(argv) == 1:
-        print("No tests specified", file=sys.stderr)
-        sys.exit(1)
+    # Send list of tests to client.
+    test_list = runner.serialize_suite(suite)
+    handler.emit("testList", test_list)
+
+    handler.suite = suite
+    environment.env.handler = handler
+
+    # Due to extent of how much unittest sucks, this is unfortunately
+    # necessary:
+    _install_test_event_hooks(test_runner, handler)
 
     try:
-        # In order to be able to run tests by their fully-qualified
-        # name on the command line without importing all tests here,
-        # module must be set to None.  Python 3.2's unittest.main
-        # ignores defaultTest if no module is given (it tries to do
-        # its own test discovery, which is incompatible with
-        # auto2to3), so don't set module if we're not asking for a
-        # specific test.
+        results = test_runner.run(suite)
+    except (SystemExit, KeyboardInterrupt) as e:
+        sys.exit(1)
 
-        # TODO: Get introspected list of tests from runner that we can
-        # pass along to the handler.  The handler will send this list
-        # of tests to the client when it connects.
+    return results
 
-        # TODO: Clean up:
-        runner = PreInstantiatedTestRunner()
-        delegator = TestEventDelegator(
-            runner.stream, runner.descriptions, runner.verbosity)
-        runner.resultclass = delegator
-        updater = TestStateUpdater(handler)
-        runner.resultclass.add_callback(updater)
 
-        # TODO(ato): Total hack
-        runner.run(handler.suite)
-    except SystemExit as e:
-        if e.code == 0:
-            gen_log.info("PASS")
+def main(argv):
+    config = {}
+    from semiauto.loader import TestLoader
+    test_loader = TestLoader(config=config)
+    prog = "python -m semiauto"
+    indent = " " * len(prog)
+    usage = """\
+usage: %s [-h|--help] [-v|--verbose] [-q|--quiet]
+%s [-f|--failfast] [-c|--catch] [-b|--buffer]
+%s [TEST...|discover DIRECTORY [-p|--pattern]]
+
+TEST can be a list of any number of test modules, classes, and test
+modules.
+
+The magic keyword "discover" can be used to autodetect tests according
+to various criteria. By default it will start looking recursively for
+tests in the current working directory (".").\
+""" % (prog, indent, indent)
+
+    import optparse
+    parser = optparse.OptionParser(usage=usage)
+    parser.add_option("-v", "--verbose", action="store_true",
+                      dest="verbose", default=False,
+                      help="Verbose output")
+    parser.add_option("-q", "--quiet", action="store_true",
+                      dest="quiet", help="Minimal output")
+    parser.add_option("--failfast", "-f", action="store_true",
+                      dest="failfast", help="Stop on first failure")
+    parser.add_option("--catch", "-c", action="store_true",
+                      help="Catch C-c and display eresults")
+    parser.add_option("--buffer", "-b", action="store_true",
+                      help="Buffer stdout and stderr during test runs")
+    parser.add_option("--pattern", "-p", dest="pattern",
+                      help='Pattern to match tests ("test_*.py" default)')
+    parser.add_option("--reuse-browser", dest="reuse_browser",
+                      help="Reuse an existing browser session.")
+
+    opts, args = parser.parse_args(argv[1:])
+    tests = []
+
+    if len(args) >= 1 and args[0] == "discover":
+        start_dir = args[1] if len(args) > 1 else "."
+        tests = test_loader.discover(start_dir, opts.pattern or "test_*.py")
+    else:
+        tests = None
+        if len(args) > 0:
+            test_names = args
+            tests = test_loader.loadTestsFromNames(test_names, None)
         else:
-            gen.log.error("FAIL")
-        raise
+            tests = unittest.TestSuite()
+
+    results = run(tests,
+                  verbosity=2 if opts.verbose else 1,
+                  failfast=opts.failfast,
+                  catch_break=opts.catch,
+                  buffer=opts.buffer)
+    sys.exit(not results.wasSuccessful())

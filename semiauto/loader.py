@@ -1,20 +1,28 @@
 import unittest
 
+
 class TestLoader(unittest.loader.TestLoader):
     """Loads tests according to various criteria and returns them wrapped
     in `unittest.TestSuite`.
 
     Unlike `unittest.TestLoader` it allows forwarding construction
-    arguments to the test case classes.
+    arguments to the test case classes constructed herein.
 
     """
 
-    def __init__(self, extra_kwargs=None):
+    def __init__(self, **kwargs):
         super(TestLoader, self).__init__()
-        self.opts = extra_kwargs
+        self.opts = kwargs
 
     def loadTestsFromTestCase(self, klass):
-        """Return a suite of all tests cases contained in ``klass``."""
+        """Return a suite of all tests cases contained in ``klass``.
+
+        This emulates the behaviour of the method it's overriding, but
+        allows the keyword arguments passed in at construction time of
+        this class to be forwarded to the test classes that it
+        constructs.
+
+        """
 
         if issubclass(klass, unittest.suite.TestSuite):
             raise TypeError("Test cases should not be derived from TestSuite")
