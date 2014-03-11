@@ -69,7 +69,7 @@ class TestCase(tornado.testing.AsyncTestCase):
     def use_cert_app(self):
         # app management is done in the system app
         self.marionette.switch_to_frame()
-        self.marionette.import_script("tests/app_management.js")
+        self.marionette.import_script("semiauto/tests/app_management.js")
         script = "GaiaApps.launchWithName('CertTest App');"
         try:
             self.cert_test_app = self.marionette.execute_async_script(script, script_timeout=5000)

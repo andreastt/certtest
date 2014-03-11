@@ -32,6 +32,7 @@ class InProcessTestEnvironment(object):
         self.server = server_cls(addr, io_loop=self.io_loop)
 
     def start(self, block=False):
+        import ipdb; ipdb.set_trace()
         """Start the test environment.
 
         :param block: True to run the server on the current thread,
@@ -45,7 +46,7 @@ class InProcessTestEnvironment(object):
             self.server.start()
         else:
             self.server_thread = threading.Thread(target=self.server.start)
-            self.server_thread.daemon = True  # don't hang on exist
+            self.server_thread.daemon = True  # don't hang on exit
             self.server_thread.start()
 
     def stop(self):
@@ -73,4 +74,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     env = InProcessTestEnvironment()
     print("Listening on %s" % ":".join(str(i) for i in env.server.addr))
+    # We ask the environment to block here so that the program won't
+    # end immediately.
     env.start(block=True)
