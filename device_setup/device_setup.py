@@ -10,6 +10,9 @@ def main(options):
         dm = mozdevice.DeviceManagerADB(adbPath=options.adb_path)
     else:
         dm = mozdevice.DeviceManagerADB()
+    if dm.dirExists("/data/local/webapps/certtest-app"):
+        print "CertTest app is already installed"
+        return
     dm.pushFile("certtest_app.zip", "/data/local/certtest_app.zip")
     # forward the marionette port
     print "Forwarding marionette port"
