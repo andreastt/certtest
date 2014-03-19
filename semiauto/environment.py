@@ -10,10 +10,10 @@ from tornado.ioloop import IOLoop
 env = None
 
 
-def get(environ, **kwargs):
+def get(environ, *args, **kwargs):
     global env
     if not env:
-        env = environ(**kwargs)
+        env = environ(*args, **kwargs)
         env.start()
     assert env.is_alive()
     return env
