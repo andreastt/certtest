@@ -12,13 +12,16 @@ from semiauto import environment
 from semiauto.environment import InProcessTestEnvironment
 
 
-default_timeout = 600  # 10 minutes
+"""The default time to wait for a user to respond to a prompt or
+instruction in a test."""
+prompt_timeout = 600  # 10 minutes
 
 
 # TODO(ato): Find better name: interaction_test? interact?
 def test(*args, **kwargs):
     """Wraps ``tornado.testing.gen_test``."""
-    return tornado.testing.gen_test(timeout=default_timeout, *args, **kwargs)
+    timeout = kwargs.get("timeout", prompt_timeout)
+    return tornado.testing.gen_test(timeout=timeout, *args, **kwargs)
 
 
 class TestCase(tornado.testing.AsyncTestCase):
