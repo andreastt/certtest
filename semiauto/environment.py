@@ -46,7 +46,7 @@ class InProcessTestEnvironment(object):
             self.server.start()
         else:
             self.server_thread = threading.Thread(target=self.server.start)
-            self.server_thread.daemon = True  # don't hang on exist
+            self.server_thread.daemon = True  # don't hang on exit
             self.server_thread.start()
 
     def stop(self):
