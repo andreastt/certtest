@@ -19,8 +19,8 @@ def _install_test_event_hooks(test_runner, handler):
     test_runner.resultclass.add_callback(state_updater)
 
 
-def run(suite, verbosity=1, quiet=False, failfast=False,
-        catch_break=False, buffer=True, **kwargs):
+def run(suite, spawn_browser=True, verbosity=1, quiet=False,
+        failfast=False, catch_break=False, buffer=True, **kwargs):
     """A simple test runner.
 
     This test runner is essentially equivalent to ``unittest.main``
@@ -64,13 +64,19 @@ def run(suite, verbosity=1, quiet=False, failfast=False,
     env = environment.get(environment.InProcessTestEnvironment)
 
     # TODO(ato): Only spawn a browser when asked to.
-    import webbrowser
-    webbrowser.open("http://localhost:6666/")
+    if spawn_browser:
+        import webbrowser
+        webbrowser.open("http://localhost:6666/")
+    else:
+        print("Please connect your browser to http://%s:%d/" %
+              (env.server.addr[0], env.server.addr[1]))
 
     # Get a reference to the WebSocket handler that we can use to
-    # communicate with the client browser.
+    # communicate with the client browser.  This blocks until a client
+    # connects.
     from semiauto import server
-    handler = server.clients.get(block=True)
+    # A timeout is needed because of http://bugs.python.org/issue1360
+    handler = server.clients.get(block=True, timeout=sys.maxint)
 
     # Send list of tests to client.
     test_list = runner.serialize_suite(suite)
@@ -112,6 +118,9 @@ tests in the current working directory (".").\
 
     import optparse
     parser = optparse.OptionParser(usage=usage)
+    parser.add_option("-n", "--no-browser", action="store_true",
+                      dest="no_browser", default=False, help="Don't "
+                      "start a browser but wait for manual connection")
     parser.add_option("-v", "--verbose", action="store_true",
                       dest="verbose", default=False,
                       help="Verbose output")
@@ -143,6 +152,7 @@ tests in the current working directory (".").\
             tests = unittest.TestSuite()
 
     results = run(tests,
+                  spawn_browser=not opts.no_browser,
                   verbosity=2 if opts.verbose else 1,
                   failfast=opts.failfast,
                   catch_break=opts.catch,
