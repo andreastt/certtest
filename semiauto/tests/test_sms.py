@@ -2,8 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from tests import TestCase
-from tests import test
+from tests import TestCase, test
+from wait import Wait
 
 
 class TestSms(TestCase):
