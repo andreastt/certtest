@@ -4,6 +4,7 @@
 
 from tornado import testing
 import sys
+import threading
 import tornado
 
 from marionette import Marionette, MarionetteException
@@ -25,14 +26,17 @@ def test(*args, **kwargs):
 
 
 class TestCase(tornado.testing.AsyncTestCase):
+    stored = threading.local()
+
     def __init__(self, *args, **kwargs):
         self.config = kwargs.pop("config")
         #self.handler = kwargs.pop('handler')
         #self.io_loop = kwargs.pop('io_loop')
+
         super(TestCase, self).__init__(*args, **kwargs)
         self.io_loop = self.get_new_ioloop()
-        self.handler = None
-        self.marionette = None
+        self.stored.handler = None
+        self.stored.marionette = None
 
     def setUp(self):
         """Sets up the environment for a test case.
@@ -43,38 +47,35 @@ class TestCase(tornado.testing.AsyncTestCase):
         through ``self.handler``.
 
         Then set up a Marionette session to the connected device if
-        one does not already exist.
+        one does not already exist.  This is assigned to
+        ``self.marionette``.  Marionette can be used to remote control
+        the device.
 
         """
 
         super(TestCase, self).setUp()
-
         self.environment = environment.get(InProcessTestEnvironment)
         self.server = self.environment.server
         self.handler = self.environment.handler
-
-        # TODO(ato): Also store marionette session and client handler
-        # inside environment?
-        self.environment = environment.get(InProcessTestEnvironment)
-        self.server = self.environment.server
-
-        self.create_marionette()
+        self.marionette = self.create_marionette()
         self.io_loop.run_sync(self.use_cert_app)
 
     def tearDown(self):
-        super(TestCase, self).tearDown()
         self.io_loop.run_sync(self.close_cert_app)
-
-    def tearDown(self):
-        self.server.stop()
         super(TestCase, self).tearDown()
 
-    def create_marionette(self):
+    @staticmethod
+    def create_marionette():
         """Creates a new Marionette session if one does not exist."""
 
-        if not self.marionette or not self.marionette.session:
-            self.marionette = Marionette()
-            self.marionette.start_session()
+        m = TestCase.stored.marionette
+
+        if not m:
+            m = Marionette()
+            m.start_session()
+            TestCase.stored.marionette = m
+
+        return TestCase.stored.marionette
 
     @tornado.gen.coroutine
     def use_cert_app(self):
@@ -95,9 +96,10 @@ class TestCase(tornado.testing.AsyncTestCase):
             yield self.instruct(message)
             self.fail(message)
 
+    # TODO(ato): Cross reference and update against fxos-certsuite
     @tornado.gen.coroutine
     def close_cert_app(self):
-        self.marionette.import_script("tests/app_management.js")
+        self.marionette.import_script("semiauto/tests/app_management.js")
         # app management is done in the system app
         self.marionette.switch_to_frame()
         script = "GaiaApps.kill('%s');" % self.cert_test_app["origin"]
